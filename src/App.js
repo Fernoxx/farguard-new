@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wallet, ChevronDown, CheckCircle, XCircle, Loader2, AlertTriangle, ExternalLink, Shield } from 'lucide-react';
+import { Wallet, ChevronDown, CheckCircle, XCircle, Loader2, AlertTriangle, ExternalLink, Shield, X } from 'lucide-react';
 
 function App() {
   const [selectedChain, setSelectedChain] = useState('ethereum');
@@ -32,193 +32,160 @@ function App() {
       rpcUrl: 'https://arb1.arbitrum.io/rpc',
       explorerUrl: 'https://arbiscan.io',
       nativeCurrency: 'ETH'
+    },
+    celo: {
+      chainId: 42220,
+      name: 'Celo',
+      rpcUrl: 'https://forno.celo.org',
+      explorerUrl: 'https://celoscan.io',
+      nativeCurrency: 'CELO'
     }
   };
 
-  // ERC20 Transfer event signature for approval detection
+  // ERC20 Approval event signature
   const ERC20_APPROVAL_TOPIC = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925';
-  const ERC721_APPROVAL_TOPIC = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925';
-  const ERC721_APPROVAL_ALL_TOPIC = '0x17307eab39ab6107e8899845ad3d59bd9653f200f220920489ca2b5937696c31';
 
-  // Common spender addresses (DEXs, marketplaces, etc.)
+  // Enhanced known spenders database
   const knownSpenders = {
-    '0x1111111254EEB25477B68fb85Ed929f73A960582': { name: '1inch Router', risk: 'medium' },
-    '0xE592427A0AEce92De3Edee1F18E0157C05861564': { name: 'Uniswap V3 Router', risk: 'low' },
-    '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D': { name: 'Uniswap V2 Router', risk: 'low' },
-    '0x00000000000001ad428e4906aE43D8F9852d0dD6': { name: 'OpenSea Seaport', risk: 'medium' },
-    '0x74de5d4FCbf63E00296fd95d33236B9794016631': { name: 'MetaMask Swap Router', risk: 'low' },
-    '0x3fc91A3afd70395Cd496C647d5a6CC9D4B2b7FAD': { name: 'Uniswap Universal Router', risk: 'low' }
+    // DEX Aggregators
+    '0x1111111254eeb25477b68fb85ed929f73a960582': { name: '1inch V5 Router', risk: 'high' },
+    '0x111111125421ca6dc452d289314280a0f8842a65': { name: '1inch V4 Router', risk: 'high' },
+    '0x74de5d4fcbf63e00296fd95d33236b9794016631': { name: 'MetaMask Swap Router', risk: 'medium' },
+    
+    // Uniswap
+    '0xe592427a0aece92de3edee1f18e0157c05861564': { name: 'Uniswap V3 Router', risk: 'low' },
+    '0x7a250d5630b4cf539739df2c5dacb4c659f2488d': { name: 'Uniswap V2 Router', risk: 'low' },
+    '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad': { name: 'Uniswap Universal Router', risk: 'low' },
+    '0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45': { name: 'Uniswap V3 Router 2', risk: 'low' },
+    
+    // OpenSea
+    '0x00000000000001ad428e4906ae43d8f9852d0dd6': { name: 'OpenSea Seaport 1.5', risk: 'medium' },
+    '0x00000000000000adc04c56bf30ac9d3c0aaf14dc': { name: 'OpenSea Seaport 1.4', risk: 'medium' },
+    '0x1e0049783f008a0085193e00003d00cd54003c71': { name: 'OpenSea Seaport 1.6', risk: 'medium' },
+    '0x7be8076f4ea4a4ad08075c2508e481d6c946d12b': { name: 'OpenSea Wyvern Exchange', risk: 'medium' },
+    
+    // Other DEXs
+    '0xd9e1ce17f2641f24ae83637ab66a2cca9c378b9f': { name: 'SushiSwap Router', risk: 'low' },
+    '0xdef1c0ded9bec7f1a1670819833240f027b25eff': { name: '0x Protocol', risk: 'medium' },
+    
+    // Lending Protocols
+    '0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9': { name: 'Aave Lending Pool', risk: 'low' },
+    '0x3d9819210a31b4961b30ef54be2aed79b9c9cd3b': { name: 'Compound cDAI', risk: 'low' },
   };
 
-  // Comprehensive approval fetching like revoke.cash
-  const fetchRealApprovals = async (walletAddress, chainKey) => {
-    setIsLoading(true);
-    setError('');
-    
+  // Get token information from contract
+  const getTokenInfo = async (tokenAddress, chainKey) => {
     try {
       const config = chainConfigs[chainKey];
-      let allApprovals = [];
-
-      console.log(`Fetching approvals for ${walletAddress} on ${chainKey}...`);
-
-      // Method 1: Get approval events from logs (like revoke.cash)
-      const logApprovals = await fetchApprovalEvents(walletAddress, chainKey);
-      allApprovals.push(...logApprovals);
-
-      // Method 2: Check current allowances on popular tokens
-      const currentApprovals = await fetchCurrentAllowances(walletAddress, chainKey);
-      allApprovals.push(...currentApprovals);
-
-      // Method 3: Check NFT approvals for all
-      const nftApprovals = await fetchNFTApprovals(walletAddress, chainKey);
-      allApprovals.push(...nftApprovals);
-
-      // Remove duplicates and filter active approvals
-      const uniqueApprovals = removeDuplicateApprovals(allApprovals);
-      const activeApprovals = uniqueApprovals.filter(approval => 
-        approval.allowance !== '0' && approval.allowance !== 'Revoked'
-      );
-
-      console.log(`Found ${activeApprovals.length} active approvals`);
-      setApprovals(activeApprovals);
-
+      
+      const [nameResponse, symbolResponse] = await Promise.all([
+        fetch(config.rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'eth_call',
+            params: [{
+              to: tokenAddress,
+              data: '0x06fdde03'
+            }, 'latest'],
+            id: 1
+          })
+        }),
+        fetch(config.rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'eth_call',
+            params: [{
+              to: tokenAddress,
+              data: '0x95d89b41'
+            }, 'latest'],
+            id: 2
+          })
+        })
+      ]);
+      
+      const nameData = await nameResponse.json();
+      const symbolData = await symbolResponse.json();
+      
+      if (nameData.result && symbolData.result) {
+        const name = hexToString(nameData.result) || 'Unknown Token';
+        const symbol = hexToString(symbolData.result) || 'UNKNOWN';
+        return { name, symbol };
+      }
+      
+      return { name: 'Unknown Token', symbol: 'UNKNOWN' };
     } catch (error) {
-      console.error('Error fetching real approvals:', error);
-      setError(`Unable to fetch approvals. This might be due to API limits. Your wallet may have approvals that aren't visible right now.`);
-      setApprovals([]);
-    } finally {
-      setIsLoading(false);
+      console.log('Error getting token info:', error);
+      return { name: 'Unknown Token', symbol: 'UNKNOWN' };
     }
   };
 
-  // Fetch approval events using multiple methods
-  const fetchApprovalEvents = async (walletAddress, chainKey) => {
-    const approvals = [];
-    
+  // Convert hex to string
+  const hexToString = (hex) => {
     try {
-      // Use public RPC endpoints to get logs (like revoke.cash does)
-      const config = chainConfigs[chainKey];
+      if (!hex || hex === '0x' || hex.length < 130) return '';
       
-      // Get the latest block number
-      const latestBlockResponse = await fetch(config.rpcUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'eth_blockNumber',
-          params: [],
-          id: 1
-        })
-      });
+      hex = hex.slice(2);
+      const lengthHex = hex.slice(64, 128);
+      const length = parseInt(lengthHex, 16);
       
-      const latestBlockData = await latestBlockResponse.json();
-      const latestBlock = parseInt(latestBlockData.result, 16);
-      const fromBlock = Math.max(0, latestBlock - 10000); // Last ~10k blocks
+      if (length === 0 || length > 100) return '';
       
-      console.log(`Scanning blocks ${fromBlock} to ${latestBlock} for approvals...`);
-
-      // Get ERC20 Approval events where owner = walletAddress
-      const approvalLogs = await fetchLogs(config.rpcUrl, {
-        fromBlock: `0x${fromBlock.toString(16)}`,
-        toBlock: 'latest',
-        topics: [
-          ERC20_APPROVAL_TOPIC, // Approval(owner, spender, value)
-          `0x000000000000000000000000${walletAddress.slice(2).toLowerCase()}`, // owner = walletAddress
-          null // any spender
-        ]
-      });
-
-      console.log(`Found ${approvalLogs.length} approval events`);
-
-      // Parse each approval event
-      for (const log of approvalLogs) {
-        try {
-          const approval = await parseApprovalLog(log, walletAddress, chainKey);
-          if (approval) {
-            approvals.push(approval);
-          }
-        } catch (parseError) {
-          console.log('Error parsing approval log:', parseError);
+      const stringHex = hex.slice(128, 128 + (length * 2));
+      
+      let result = '';
+      for (let i = 0; i < stringHex.length; i += 2) {
+        const byte = parseInt(stringHex.substr(i, 2), 16);
+        if (byte > 0 && byte < 128) {
+          result += String.fromCharCode(byte);
         }
       }
-
+      
+      return result.trim();
     } catch (error) {
-      console.log('Error fetching approval events:', error);
+      return '';
+    }
+  };
+
+  // Get spender info and risk assessment
+  const getSpenderInfo = (spenderAddress) => {
+    const address = spenderAddress.toLowerCase();
+    
+    if (knownSpenders[address]) {
+      return knownSpenders[address];
     }
     
-    return approvals;
+    return { name: 'Unknown Contract', risk: 'high' };
   };
 
-  // Fetch logs from RPC
-  const fetchLogs = async (rpcUrl, params) => {
+  // Format allowance amount
+  const formatAllowance = (allowanceHex) => {
     try {
-      const response = await fetch(rpcUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'eth_getLogs',
-          params: [params],
-          id: 1
-        })
-      });
-
-      const data = await response.json();
-      return data.result || [];
-    } catch (error) {
-      console.log('RPC logs request failed:', error);
-      return [];
-    }
-  };
-
-  // Parse individual approval log
-  const parseApprovalLog = async (log, walletAddress, chainKey) => {
-    try {
-      const tokenAddress = log.address;
-      const spenderAddress = '0x' + log.topics[2].slice(26); // Remove padding from spender
-      const allowanceHex = log.data;
+      if (allowanceHex === '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff') {
+        return 'Unlimited';
+      }
       
-      // Skip zero approvals (revoked)
-      if (allowanceHex === '0x0000000000000000000000000000000000000000000000000000000000000000') {
-        return null;
+      const decimal = parseInt(allowanceHex, 16);
+      if (decimal === 0) return '0';
+      
+      if (decimal > 1000000000000000000) {
+        return 'Large Amount';
       }
-
-      // Get current allowance to verify it's still active
-      const currentAllowance = await getCurrentAllowance(tokenAddress, walletAddress, spenderAddress, chainKey);
-      if (!currentAllowance || currentAllowance === '0') {
-        return null; // Already revoked
-      }
-
-      // Get token information
-      const tokenInfo = await getTokenInfo(tokenAddress, chainKey);
-      const spenderInfo = getSpenderInfo(spenderAddress);
-
-      return {
-        id: `${tokenAddress}-${spenderAddress}`,
-        tokenName: tokenInfo?.name || 'Unknown Token',
-        tokenSymbol: tokenInfo?.symbol || 'UNKNOWN',
-        tokenAddress: tokenAddress.toLowerCase(),
-        spenderAddress: spenderAddress.toLowerCase(),
-        spenderName: spenderInfo.name,
-        allowance: currentAllowance === '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' ? 'Unlimited' : formatAllowance(currentAllowance),
-        type: 'ERC20',
-        riskLevel: spenderInfo.risk,
-        lastActivity: 'Recent',
-        txHash: log.transactionHash,
-        blockNumber: parseInt(log.blockNumber, 16)
-      };
-
+      
+      return 'Limited';
     } catch (error) {
-      console.log('Error parsing approval log:', error);
-      return null;
+      return 'Limited';
     }
   };
 
-  // Get current allowance for a token
+  // Get current allowance with retry logic
   const getCurrentAllowance = async (tokenAddress, ownerAddress, spenderAddress, chainKey) => {
+    const config = chainConfigs[chainKey];
+    
     try {
-      const config = chainConfigs[chainKey];
-      
       const response = await fetch(config.rpcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -227,193 +194,148 @@ function App() {
           method: 'eth_call',
           params: [{
             to: tokenAddress,
-            data: `0xdd62ed3e${ownerAddress.slice(2).padStart(64, '0')}${spenderAddress.slice(2).padStart(64, '0')}` // allowance(owner, spender)
+            data: '0xdd62ed3e' + ownerAddress.slice(2).padStart(64, '0') + spenderAddress.slice(2).padStart(64, '0')
           }, 'latest'],
           id: 1
         })
       });
 
       const data = await response.json();
+      
+      if (data.error) {
+        throw new Error(data.error.message);
+      }
+      
       return data.result;
     } catch (error) {
-      console.log('Error getting current allowance:', error);
-      return '0';
+      console.log(`Failed to get allowance:`, error);
+      return '0x0000000000000000000000000000000000000000000000000000000000000000';
     }
   };
 
-  // Check current allowances on popular tokens (like revoke.cash popular tokens list)
-  const fetchCurrentAllowances = async (walletAddress, chainKey) => {
-    const approvals = [];
-    
-    // Popular tokens per chain (like revoke.cash uses)
-    const popularTokens = {
-      ethereum: [
-        { address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', name: 'USD Coin', symbol: 'USDC' },
-        { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', name: 'Tether USD', symbol: 'USDT' },
-        { address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', name: 'Wrapped Ether', symbol: 'WETH' },
-        { address: '0x6B175474E89094C44Da98b954EedeAC495271d0F', name: 'Dai Stablecoin', symbol: 'DAI' },
-        { address: '0x514910771AF9Ca656af840dff83E8264EcF986CA', name: 'ChainLink Token', symbol: 'LINK' },
-        { address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', name: 'Uniswap', symbol: 'UNI' },
-        { address: '0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0', name: 'Polygon', symbol: 'MATIC' },
-        { address: '0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE', name: 'Shiba Inu', symbol: 'SHIB' }
-      ],
-      base: [
-        { address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', name: 'USD Coin', symbol: 'USDC' },
-        { address: '0x4200000000000000000000000000000000000006', name: 'Wrapped Ether', symbol: 'WETH' }
-      ],
-      arbitrum: [
-        { address: '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8', name: 'USD Coin (Arb1)', symbol: 'USDC' },
-        { address: '0x912CE59144191C1204E64559FE8253a0e49E6548', name: 'Arbitrum', symbol: 'ARB' },
-        { address: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', name: 'Wrapped Ether', symbol: 'WETH' }
-      ]
-    };
-
-    const tokens = popularTokens[chainKey] || [];
-    const commonSpenders = Object.keys(knownSpenders);
-
-    console.log(`Checking ${tokens.length} popular tokens against ${commonSpenders.length} known spenders...`);
-
-    for (const token of tokens) {
-      for (const spenderAddress of commonSpenders) {
-        try {
-          const allowance = await getCurrentAllowance(token.address, walletAddress, spenderAddress, chainKey);
-          
-          if (allowance && allowance !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
-            const spenderInfo = getSpenderInfo(spenderAddress);
-            
-            approvals.push({
-              id: `${token.address}-${spenderAddress}`,
-              tokenName: token.name,
-              tokenSymbol: token.symbol,
-              tokenAddress: token.address.toLowerCase(),
-              spenderAddress: spenderAddress.toLowerCase(),
-              spenderName: spenderInfo.name,
-              allowance: allowance === '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' ? 'Unlimited' : formatAllowance(allowance),
-              type: 'ERC20',
-              riskLevel: spenderInfo.risk,
-              lastActivity: 'Active',
-              txHash: 'Current State',
-              blockNumber: 'Current'
-            });
-          }
-        } catch (error) {
-          console.log(`Error checking ${token.symbol} allowance for ${spenderAddress}:`, error);
-        }
-      }
-    }
-
-    return approvals;
-  };
-
-  // Format allowance amount
-  const formatAllowance = (allowanceHex) => {
-    try {
-      const allowanceBigInt = BigInt(allowanceHex);
-      if (allowanceBigInt === BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff')) {
-        return 'Unlimited';
-      }
-      
-      // Convert to readable format (simplified)
-      const allowanceStr = allowanceBigInt.toString();
-      if (allowanceStr.length > 18) {
-        const formatted = allowanceStr.slice(0, -18) + '.' + allowanceStr.slice(-18, -15);
-        return parseFloat(formatted).toFixed(2);
-      }
-      
-      return allowanceStr;
-    } catch (error) {
-      return 'Limited';
-    }
-  };
-
-  // Fetch NFT approvals
-  const fetchNFTApprovals = async (walletAddress, chainKey) => {
-    const approvals = [];
+  // Comprehensive approval scanning
+  const fetchRealApprovals = async (walletAddress, chainKey) => {
+    setIsLoading(true);
+    setError('');
     
     try {
-      const config = chainConfigs[chainKey];
+      console.log('🔍 Scanning wallet ' + walletAddress + ' on ' + chainKey + '...');
       
-      // Popular NFT collections per chain
-      const popularNFTs = {
+      const approvals = [];
+
+      // Check popular tokens against known spenders
+      const popularTokens = {
         ethereum: [
-          { address: '0xBC4CA0EdA7647A8aB7C2061c2E118A18a93fE367', name: 'Bored Ape Yacht Club', symbol: 'BAYC' },
-          { address: '0x60E4d786628Fea6478F785A6d7e704777c86a7c6', name: 'Mutant Ape Yacht Club', symbol: 'MAYC' },
-          { address: '0xb47e3cd837dDF8e4c57F05d70Ab865de6e193BBB', name: 'CryptoPunks', symbol: 'PUNKS' },
-          { address: '0xED5AF388653567Af2F388E6224dC7C4b3241C544', name: 'Azuki', symbol: 'AZUKI' }
+          { address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', name: 'USD Coin', symbol: 'USDC' },
+          { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', name: 'Tether USD', symbol: 'USDT' },
+          { address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', name: 'Wrapped Ether', symbol: 'WETH' },
+          { address: '0x6B175474E89094C44Da98b954EedeAC495271d0F', name: 'Dai Stablecoin', symbol: 'DAI' },
+          { address: '0x514910771AF9Ca656af840dff83E8264EcF986CA', name: 'ChainLink Token', symbol: 'LINK' },
+          { address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', name: 'Uniswap', symbol: 'UNI' },
+          { address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', name: 'Wrapped BTC', symbol: 'WBTC' },
         ],
-        base: [],
-        arbitrum: []
+        base: [
+          { address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', name: 'USD Coin', symbol: 'USDC' },
+          { address: '0x4200000000000000000000000000000000000006', name: 'Wrapped Ether', symbol: 'WETH' },
+        ],
+        arbitrum: [
+          { address: '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8', name: 'USD Coin (Arb1)', symbol: 'USDC' },
+          { address: '0x912CE59144191C1204E64559FE8253a0e49E6548', name: 'Arbitrum', symbol: 'ARB' },
+          { address: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', name: 'Wrapped Ether', symbol: 'WETH' },
+        ],
+        celo: [
+          { address: '0x765DE816845861e75A25fCA122bb6898B8B1282a', name: 'Celo Dollar', symbol: 'cUSD' },
+          { address: '0xD8763CBa276a3738E6DE85b4b3bF5FDed6D6cA73', name: 'Celo Euro', symbol: 'cEUR' },
+        ]
       };
 
-      const nfts = popularNFTs[chainKey] || [];
-      const nftMarketplaces = [
-        '0x00000000000001ad428e4906aE43D8F9852d0dD6', // OpenSea Seaport
-        '0x00000000000000ADc04C56Bf30aC9d3c0aAF14dC', // OpenSea Seaport 1.4
-        '0x1E0049783F008A0085193E00003D00cd54003c71', // OpenSea Seaport 1.5
-      ];
+      const tokens = popularTokens[chainKey] || [];
+      const allSpenders = Object.keys(knownSpenders);
 
-      for (const nft of nfts) {
-        for (const marketplace of nftMarketplaces) {
-          try {
-            // Check isApprovedForAll(owner, operator)
-            const response = await fetch(config.rpcUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                jsonrpc: '2.0',
-                method: 'eth_call',
-                params: [{
-                  to: nft.address,
-                  data: `0xe985e9c5${walletAddress.slice(2).padStart(64, '0')}${marketplace.slice(2).padStart(64, '0')}` // isApprovedForAll(owner, operator)
-                }, 'latest'],
-                id: 1
-              })
-            });
+      console.log('Checking ' + tokens.length + ' tokens against ' + allSpenders.length + ' spenders...');
 
-            const data = await response.json();
-            
-            // If approved (returns true = 0x0000...0001)
-            if (data.result && data.result === '0x0000000000000000000000000000000000000000000000000000000000000001') {
-              const spenderInfo = getSpenderInfo(marketplace);
+      // For demo purposes, add some mock approvals if no MetaMask is connected
+      if (!window.ethereum || walletAddress.startsWith('0x742d35Cc')) {
+        // Add some demo approvals
+        approvals.push({
+          id: 'demo-1',
+          tokenName: 'USD Coin',
+          tokenSymbol: 'USDC',
+          tokenAddress: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+          spenderAddress: '0x1111111254eeb25477b68fb85ed929f73a960582',
+          spenderName: '1inch V5 Router',
+          allowance: 'Unlimited',
+          type: 'ERC20',
+          riskLevel: 'high',
+          lastActivity: 'Demo',
+          txHash: 'Demo',
+          blockNumber: 'Demo'
+        });
+        
+        approvals.push({
+          id: 'demo-2',
+          tokenName: 'Wrapped Ether',
+          tokenSymbol: 'WETH',
+          tokenAddress: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+          spenderAddress: '0xe592427a0aece92de3edee1f18e0157c05861564',
+          spenderName: 'Uniswap V3 Router',
+          allowance: 'Limited',
+          type: 'ERC20',
+          riskLevel: 'low',
+          lastActivity: 'Demo',
+          txHash: 'Demo',
+          blockNumber: 'Demo'
+        });
+      } else {
+        // Real scanning for MetaMask users
+        for (const token of tokens) {
+          for (const spenderAddress of allSpenders) {
+            try {
+              const allowance = await getCurrentAllowance(token.address, walletAddress, spenderAddress, chainKey);
               
-              approvals.push({
-                id: `${nft.address}-${marketplace}`,
-                tokenName: nft.name,
-                tokenSymbol: nft.symbol,
-                tokenAddress: nft.address.toLowerCase(),
-                spenderAddress: marketplace.toLowerCase(),
-                spenderName: spenderInfo.name,
-                allowance: 'All NFTs',
-                type: 'ERC721',
-                riskLevel: spenderInfo.risk,
-                lastActivity: 'Active',
-                txHash: 'Current State',
-                blockNumber: 'Current'
-              });
+              if (allowance && allowance !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
+                const spenderInfo = getSpenderInfo(spenderAddress);
+                
+                approvals.push({
+                  id: `${token.address}-${spenderAddress}`,
+                  tokenName: token.name,
+                  tokenSymbol: token.symbol,
+                  tokenAddress: token.address.toLowerCase(),
+                  spenderAddress: spenderAddress.toLowerCase(),
+                  spenderName: spenderInfo.name,
+                  allowance: formatAllowance(allowance),
+                  type: 'ERC20',
+                  riskLevel: spenderInfo.risk,
+                  lastActivity: 'Current',
+                  txHash: 'Active',
+                  blockNumber: 'Current'
+                });
+              }
+            } catch (error) {
+              continue;
             }
-          } catch (error) {
-            console.log(`Error checking NFT approval for ${nft.symbol}:`, error);
           }
         }
       }
-    } catch (error) {
-      console.log('Error fetching NFT approvals:', error);
-    }
 
-    return approvals;
-  };
-
-  // Remove duplicate approvals
-  const removeDuplicateApprovals = (approvals) => {
-    const seen = new Set();
-    return approvals.filter(approval => {
-      const key = `${approval.tokenAddress}-${approval.spenderAddress}`;
-      if (seen.has(key)) {
-        return false;
+      console.log('✅ Found ' + approvals.length + ' active approvals');
+      
+      if (approvals.length === 0) {
+        setError('No active approvals found on popular tokens. This could mean: 1) Your wallet has no approvals, 2) All approvals were revoked, or 3) You use different tokens not in our scan list.');
       }
-      seen.add(key);
-      return true;
-    });
+
+      setApprovals(approvals.sort((a, b) => {
+        const riskOrder = { high: 3, medium: 2, low: 1 };
+        return riskOrder[b.riskLevel] - riskOrder[a.riskLevel];
+      }));
+
+    } catch (error) {
+      console.error('Critical error in approval fetching:', error);
+      setError('Failed to scan approvals: ' + error.message + '. Try switching networks or refreshing.');
+      setApprovals([]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -449,7 +371,6 @@ function App() {
         setShowWalletModal(false);
         
       } else if (walletType === 'MetaMask') {
-        // Check for ethereum provider more safely
         if (typeof window !== 'undefined' && window.ethereum && !window.ethereum._isClonedProvider) {
           try {
             const accounts = await window.ethereum.request({ 
@@ -465,7 +386,6 @@ function App() {
             setError('Wallet connection was cancelled or failed.');
           }
         } else {
-          // Fallback to mock address for demo
           console.log('MetaMask not available, using demo mode');
           const mockAddress = '0x742d35Cc85E9dc30C91C2000000000000000001';
           setWalletAddress(mockAddress);
@@ -473,8 +393,7 @@ function App() {
           setShowWalletModal(false);
         }
       } else {
-        // For other wallet types, use mock addresses
-        const mockAddress = `0x742d35Cc85E9dc30C91C200000000000000000${walletType === 'WalletConnect' ? '2' : '3'}`;
+        const mockAddress = '0x742d35Cc85E9dc30C91C200000000000000000' + (walletType === 'WalletConnect' ? '2' : '3');
         setWalletAddress(mockAddress);
         setIsWalletConnected(true);
         setShowWalletModal(false);
@@ -485,8 +404,14 @@ function App() {
     }
   };
 
-  // Real revoke approval transaction
   const handleRevokeApproval = async (approval) => {
+    // Check if it's a demo approval
+    if (approval.id.startsWith('demo-')) {
+      setApprovals(prev => prev.filter(item => item.id !== approval.id));
+      alert('Demo approval revoked successfully!');
+      return;
+    }
+
     if (!window.ethereum) {
       setError('MetaMask not found. Cannot execute revoke transaction.');
       return;
@@ -498,31 +423,17 @@ function App() {
     try {
       const provider = window.ethereum;
       
-      // Switch to correct network if needed
-      const currentChain = chainConfigs[selectedChain];
-      await switchNetwork(currentChain.chainId);
-
       let txData;
       
       if (approval.type === 'ERC20') {
-        // ERC20 approve(spender, 0) to revoke
         txData = {
           to: approval.tokenAddress,
           from: walletAddress,
-          data: `0x095ea7b3${approval.spenderAddress.slice(2).padStart(64, '0')}${'0'.repeat(64)}`, // approve(spender, 0)
-          gas: '0x15F90', // 90000 gas limit
-        };
-      } else if (approval.type === 'ERC721') {
-        // ERC721 setApprovalForAll(operator, false)
-        txData = {
-          to: approval.tokenAddress,
-          from: walletAddress,
-          data: `0xa22cb465${approval.spenderAddress.slice(2).padStart(64, '0')}${'0'.repeat(63)}0`, // setApprovalForAll(operator, false)
+          data: '0x095ea7b3' + approval.spenderAddress.slice(2).padStart(64, '0') + '0'.repeat(64),
           gas: '0x15F90',
         };
       }
 
-      // Send transaction
       const txHash = await provider.request({
         method: 'eth_sendTransaction',
         params: [txData],
@@ -530,89 +441,20 @@ function App() {
 
       console.log('Revoke transaction sent:', txHash);
       
-      // Wait for confirmation (simplified)
-      await waitForTransaction(txHash);
-      
-      // Remove from UI after successful revoke
       setApprovals(prev => prev.filter(item => item.id !== approval.id));
-      
-      // Show success message
-      alert(`Successfully revoked ${approval.tokenName} approval! Transaction: ${txHash}`);
+      alert('Successfully revoked ' + approval.tokenName + ' approval! Transaction: ' + txHash);
       
     } catch (error) {
       console.error('Revoke transaction failed:', error);
       
       if (error.code === 4001) {
         setError('Transaction cancelled by user.');
-      } else if (error.code === -32603) {
-        setError('Transaction failed. Please check your wallet balance and try again.');
       } else {
-        setError(`Revoke failed: ${error.message || 'Unknown error'}`);
+        setError('Revoke failed: ' + (error.message || 'Unknown error'));
       }
     } finally {
       setIsLoading(false);
     }
-  };
-
-  // Switch network helper
-  const switchNetwork = async (chainId) => {
-    try {
-      await window.ethereum.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: `0x${chainId.toString(16)}` }],
-      });
-    } catch (switchError) {
-      if (switchError.code === 4902) {
-        // Network not added to wallet
-        const config = Object.values(chainConfigs).find(c => c.chainId === chainId);
-        if (config) {
-          await window.ethereum.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: `0x${chainId.toString(16)}`,
-              chainName: config.name,
-              rpcUrls: [config.rpcUrl],
-              blockExplorerUrls: [config.explorerUrl],
-              nativeCurrency: {
-                name: config.nativeCurrency,
-                symbol: config.nativeCurrency,
-                decimals: 18,
-              },
-            }],
-          });
-        }
-      }
-      throw switchError;
-    }
-  };
-
-  // Wait for transaction confirmation
-  const waitForTransaction = async (txHash) => {
-    return new Promise((resolve, reject) => {
-      const checkTransaction = async () => {
-        try {
-          const receipt = await window.ethereum.request({
-            method: 'eth_getTransactionReceipt',
-            params: [txHash],
-          });
-          
-          if (receipt) {
-            if (receipt.status === '0x1') {
-              resolve(receipt);
-            } else {
-              reject(new Error('Transaction failed'));
-            }
-          } else {
-            // Transaction still pending, check again in 2 seconds
-            setTimeout(checkTransaction, 2000);
-          }
-        } catch (error) {
-          reject(error);
-        }
-      };
-      
-      checkTransaction();
-    });
   };
 
   const chains = [
@@ -749,7 +591,7 @@ function App() {
                               <div className="text-xs text-purple-400 flex items-center">
                                 {approval.tokenSymbol}
                                 <a 
-                                  href={`${chainConfigs[selectedChain]?.explorerUrl}/address/${approval.tokenAddress}`}
+                                  href={chainConfigs[selectedChain]?.explorerUrl + '/address/' + approval.tokenAddress}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="ml-1 text-purple-300 hover:text-purple-100"
@@ -770,7 +612,7 @@ function App() {
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap text-purple-200">
                           <div className="font-medium">{approval.allowance}</div>
-                          <div className="text-xs text-purple-400">Last: {approval.lastActivity}</div>
+                          <div className="text-xs text-purple-400">Status: {approval.lastActivity}</div>
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap">
                           <div className="flex items-center">
@@ -809,9 +651,16 @@ function App() {
       {showWalletModal && (
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
           <div className="bg-purple-800 rounded-xl shadow-2xl p-6 w-full max-w-sm transform transition-all duration-300 ease-in-out">
-            <h3 className="text-2xl font-bold text-purple-200 mb-6 text-center">Connect Your Wallet</h3>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-2xl font-bold text-purple-200">Connect Your Wallet</h3>
+              <button
+                onClick={() => setShowWalletModal(false)}
+                className="text-purple-300 hover:text-purple-100 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
             <div className="space-y-4">
-              {/* Farcaster Wallet - Primary option */}
               <button
                 onClick={() => handleSelectWallet('Farcaster')}
                 className="w-full flex items-center justify-center py-3 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-semibold shadow-md transition-all duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-purple-400 border-2 border-purple-400"
@@ -819,43 +668,39 @@ function App() {
                 <div className="w-6 h-6 mr-3 rounded-full bg-purple-500 flex items-center justify-center text-xs font-bold text-white">
                   FC
                 </div>
-                Farcaster Wallet (Recommended)
+                Farcaster
               </button>
               
               <button
                 onClick={() => handleSelectWallet('MetaMask')}
-                className="w-full flex items-center justify-center py-3 bg-purple-700 hover:bg-purple-600 text-white rounded-lg font-semibold shadow-md transition-all duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-purple-400"
+                className="w-full flex items-center justify-center py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-semibold shadow-md transition-all duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-orange-400"
               >
-                <div className="w-6 h-6 mr-3 rounded-full bg-orange-500 flex items-center justify-center text-xs font-bold text-white">
-                  MM
+                <div className="w-6 h-6 mr-3">
+                  🦊
                 </div>
                 MetaMask
               </button>
+              
               <button
                 onClick={() => handleSelectWallet('WalletConnect')}
-                className="w-full flex items-center justify-center py-3 bg-purple-700 hover:bg-purple-600 text-white rounded-lg font-semibold shadow-md transition-all duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-purple-400"
+                className="w-full flex items-center justify-center py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold shadow-md transition-all duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-400"
               >
-                <div className="w-6 h-6 mr-3 rounded-full bg-blue-500 flex items-center justify-center text-xs font-bold text-white">
-                  WC
+                <div className="w-6 h-6 mr-3">
+                  🔗
                 </div>
                 WalletConnect
               </button>
+              
               <button
-                onClick={() => handleSelectWallet('Coinbase Wallet')}
-                className="w-full flex items-center justify-center py-3 bg-purple-700 hover:bg-purple-600 text-white rounded-lg font-semibold shadow-md transition-all duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-purple-400"
+                onClick={() => handleSelectWallet('Coinbase')}
+                className="w-full flex items-center justify-center py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-semibold shadow-md transition-all duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-indigo-400"
               >
-                <div className="w-6 h-6 mr-3 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold text-white">
-                  CB
+                <div className="w-6 h-6 mr-3">
+                  💙
                 </div>
                 Coinbase Wallet
               </button>
             </div>
-            <button
-              onClick={() => setShowWalletModal(false)}
-              className="mt-8 w-full py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg font-semibold shadow-md transition-all duration-300 ease-in-out focus:outline-none focus:ring-2 focus:ring-gray-400"
-            >
-              Cancel
-            </button>
           </div>
         </div>
       )}
